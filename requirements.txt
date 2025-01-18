@@ -12,3 +12,6 @@ imageio
 imageio-ffmpeg
 ftfy
 bs4
+torchvision==0.19.1 # added this 
+huggingface-hub==0.25.2
+setuptools
