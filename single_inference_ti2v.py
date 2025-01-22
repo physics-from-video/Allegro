@@ -16,12 +16,22 @@ from allegro.pipelines.data_process import ToTensorVideo, CenterCropResizeVideo
 from allegro.models.vae.vae_allegro import AllegroAutoencoderKL3D
 from allegro.models.transformers.transformer_3d_allegro_ti2v import AllegroTransformerTI2V3DModel
 
+from torchvision.utils import save_image
 
-def preprocess_images(first_frame, last_frame, height, width, device, dtype):
+def denormalize(tensor: torch.Tensor) -> torch.Tensor:
+    """
+    Inverse of Lambda(lambda x: 2. * x - 1.),
+    which maps [0,1] -> [-1,1]. So do: (x + 1)/2
+    to map back from [-1,1] -> [0,1].
+    """
+    return (tensor + 1.0) / 2.0
+
+
+def preprocess_images(first_frame, last_frame, height, width, device, dtype, output_path):
     norm_fun = Lambda(lambda x: 2. * x - 1.)
     transform = transforms.Compose([
         ToTensorVideo(),
-        CenterCropResizeVideo((height, width)),
+        CenterCropResizeVideo((height, width), False),
         norm_fun
     ])
     images = []
@@ -47,9 +57,27 @@ def preprocess_images(first_frame, last_frame, height, width, device, dtype):
     
     try:
         conditional_images = [Image.open(image).convert("RGB") for image in images]
+        # write conditional image to disk
+        for i, img in enumerate(conditional_images):
+            img.save(f'{os.path.dirname(output_path)}/conditional_image.png')
+        
         conditional_images = [torch.from_numpy(np.copy(np.array(image))) for image in conditional_images]
         conditional_images = [rearrange(image, 'h w c -> c h w').unsqueeze(0) for image in conditional_images]
         conditional_images = [transform(image).to(device=device, dtype=dtype) for image in conditional_images]
+        transformed_tensors = [t.to(device=device, dtype=dtype) for t in conditional_images]
+        for i, t in enumerate(transformed_tensors):
+            # t shape is (1, C, H, W)
+            # Denormalize
+            denorm_t = denormalize(t).clamp(0, 1)
+            
+            # Option A: Use torchvision's save_image:
+            transformed_path = os.path.join(
+                os.path.dirname(output_path),
+                f'conditional_image_{i}_transformed.png'
+            )
+            save_image(denorm_t, transformed_path)
+            print(f"Saved transformed image to {transformed_path}")
+            
     except Exception as e:
         print('Error when loading images')
         print(f'condition images are {images}')
@@ -116,7 +144,7 @@ nsfw, lowres, bad anatomy, bad hands, text, error, missing fingers, extra digit,
 low quality, normal quality, jpeg artifacts, signature, watermark, username, blurry.
 """
     user_prompt = prompt_formatting(args.user_prompt, positive_prompt)
-    pre_results = preprocess_images(args.first_frame, args.last_frame, height=720, width=1280, device=torch.cuda.current_device(), dtype=torch.bfloat16)
+    pre_results = preprocess_images(args.first_frame, args.last_frame, height=720, width=900, device=torch.cuda.current_device(), dtype=torch.bfloat16, output_path=args.output_path)
     cond_imgs = pre_results['conditional_images']
     cond_imgs_indices = pre_results['conditional_images_indices']
 
@@ -142,7 +170,6 @@ low quality, normal quality, jpeg artifacts, signature, watermark, username, blu
 
 
 if __name__ == "__main__":
-
     parser = argparse.ArgumentParser()
     parser.add_argument("--user_prompt", type=str, default='')
     parser.add_argument('--first_frame', type=str, default='', help='A single image file as the first frame.')
@@ -166,8 +193,23 @@ if __name__ == "__main__":
         args.user_prompt = prompt.strip()
         args.first_frame = os.path.expandvars(img_path.strip())
     
-    if os.path.dirname(args.output_path) != '' and (not os.path.exists(os.path.dirname(args.output_path))):
-        os.makedirs(os.path.dirname(args.output_path))
+    args.output_path = os.path.join(args.output_path, "output.mp4")
+    output_dir = os.path.dirname(args.output_path)
 
-    
+    from pathlib import Path
+
+    # Ensure output directory exists
+    output_dir = Path(output_dir)  # Convert string to Path object
+    if not output_dir.exists():
+        print(f"Creating output directory: {output_dir}")
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+    # Save config
+    import json
+
+    config_path = output_dir / "config.json"  # This now works with Path
+    with open(config_path, "w") as f:
+        json.dump(vars(args), f, indent=4)
+        
+    # Proceed with single inference
     single_inference(args)
