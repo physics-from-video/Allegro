@@ -31,7 +31,7 @@ def preprocess_images(first_frame, last_frame, height, width, device, dtype, out
     norm_fun = Lambda(lambda x: 2. * x - 1.)
     transform = transforms.Compose([
         ToTensorVideo(),
-        CenterCropResizeVideo((height, width), False),
+        CenterCropResizeVideo((height, width), True),
         norm_fun
     ])
     images = []
